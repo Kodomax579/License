@@ -1,63 +1,134 @@
 """
-Script to look for licences in Github repos
+Script to look for licenses in GitLab repos
 """
 import time
 import requests
-session = requests.Session()
-headers = {
-    "Accept": "application/vnd.github+json",
-    "Authorization": f"token {GITHUB_TOKEN}"
-}
+import ssl
+import socket
 
-start = time.time()
 
-with open('github_url.txt', 'r', encoding="UTF-8") as datei:
-    urls = datei.read().splitlines()
-
+BASE_URL = "https://gitlab.insight-centre.org/api/v4"
 result = []
+headers = {}
 
-def request_github(user, repo, original_url):
+
+def set_access_token(access_token):
     """
-    Requesting repo to look for a license
-    If there is one or nothing, it will be saved
+    set access header
     """
+    with open('personal_access_token.txt', 'r', encoding="UTF-8") as github_token_file:
+        github_token = github_token_file.read().strip()
+    access_token = {
+        "PRIVATE-TOKEN":github_token
+    }
+    return access_token
+
+def get_ca():
+    """request ca"""
+    hostname = "gitlab.insight-centre.org"
+    ctx = ssl._create_unverified_context() 
+    with socket.create_connection((hostname, 443)) as sock:
+        with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+            cert = ssl.DER_cert_to_PEM_cert(ssock.getpeercert(True))
+    open("gitlab-cert.pem", "w").write(cert)
+    print("Zertifikat gespeichert ✅")
+
+
+def request_gitlab_repo_license(project_id , request_session):
+    """Request repo license info and store result"""
     start_request = time.time()
-    api_url = f"https://api.github.com/repos/{user}/{repo}"
-    response = session.get(api_url,headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        if "license" in data and data["license"]:
-            license_name = data["license"]["name"]
-            result.append(f"{original_url}  --> License: {license_name}")
-        else:
-            result.append(f"{original_url}  --> License: not Found")
+
+    repo = request_session.get(f"{BASE_URL}/projects/{project_id}?license=true", headers=headers).json()
+
+    if "license" in repo and repo["license"]:
+        license_name = repo["license"]["name"]
+        result.append(f'{repo["namespace"]["web_url"]}/{repo["name"]}  --> License: {license_name}')
     else:
-        result.append(f"{original_url}  --> Error: Status {response.status_code}")
+        result.append(f'{repo["namespace"]["web_url"]}/{repo["name"]}  --> License: not found')
+
     end_request = time.time()
-    print("Request time:", end_request-start_request)
+    print("Request time:", round(end_request - start_request, 3), "s")
 
-for url in urls:
-    if "github.com/" not in url:
-        result.append(f"{url}  --> Invalid URL")
-        continue
+def request_gitlab_project(project_id, request_session,url):
+    """Request project"""
     try:
-        part = url.split("github.com/")[1].split('/')
+        projects = request_session.get(f"{BASE_URL}/groups/{project_id}/projects", headers = headers).json()
 
-        if len(part) == 1:
-            repos = session.get(f"https://api.github.com/users/{part[0]}/repos",headers=headers).json()
-            for rep in repos:
-                REPO_URL = f"https://github.com/{part[0]}/{rep['name']}"
-                request_github(part[0], rep['name'], REPO_URL)
-        else:
-            request_github(part[0], part[1], url)
+        if not projects:
+            result.append(f"{url}  --> No Projects found")
+            return
+        
+        for project in projects:
+            request_gitlab_repo_license(project["id"],request_session)
     except Exception as e:
-        result.append(f"{url}  --> Error: {e}")
+        result.append(f"{url}  --> Error:{e}")
 
-with open('github_url_license.txt', 'w', encoding="UTF-8") as f:
-    for line in result:
-        f.write(line + '\n')
+def start_checking_repos_from_list(request_session):
+    """Request projects from user"""
+    start = time.time()
 
-end = time.time()
+    with open('gitlab_url.txt', 'r', encoding="UTF-8") as datei:
+        gitlab_urls = datei.read().splitlines()
 
-print("Time:", end - start)
-print("Done ✅")
+    for url in gitlab_urls:
+        if "gitlab.insight-centre.org" not in url:
+            result.append(f"{url}  --> Invalid URL")
+            continue
+        try:
+            part = url.split("gitlab.insight-centre.org")[1].split('/')
+
+            if len(part) > 1:
+                url = f"{part[1]}%2F{part[2]}"
+                request_gitlab_repo_license(url,request_session)
+
+        except Exception as e:
+            result.append(f"{url}  --> Error: {e}")
+
+    with open("gitlab_url_license.txt", "w", encoding="utf-8") as f:
+        for line in result:
+            f.write(line + "\n")
+
+    print("Total time:", round(time.time() - start, 2), "s")
+    print("Done ✅")
+
+
+def start_checking_all_repos(request_session):
+    """Request the users und projects"""
+    start = time.time()
+
+    try:
+        all_groups = request_session.get(f"{BASE_URL}/groups?all_available=true&per_page=100", headers = headers).json()
+        
+        for group in all_groups:
+            request_gitlab_project(group["id"],request_session,group["web_url"])
+            
+    except Exception as e:
+        result.append(f"Error: {e}")
+
+    with open("gitlab_url_license.txt", "w", encoding="utf-8") as f:
+        for line in result:
+            f.write(line + "\n")
+
+    print("Total time:", round(time.time() - start, 2), "s")
+    print("Done ✅")
+
+def menu():
+    """Simple console menu"""
+    print("GitLab License Checker")
+    print("1. Check all repos")
+    print("2. Check specific repos from the file")
+    choice = input("Bitte Zahl eingeben (1 oder 2): ").strip()
+    return choice
+
+if __name__ == "__main__":
+    session = requests.Session()
+    get_ca()
+    headers = set_access_token(headers)
+    session.verify = "gitlab-cert.pem"
+    choice = menu()
+    if choice == "1":
+        start_checking_all_repos(session)
+    elif choice == "2":
+        start_checking_repos_from_list(session)
+    else:
+        print("Ungültige Eingabe!")
