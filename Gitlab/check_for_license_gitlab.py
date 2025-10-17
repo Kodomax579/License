@@ -3,80 +3,87 @@ Script to look for licenses in GitLab repos
 """
 import time
 import requests
+import ssl
+import socket
 
+
+BASE_URL = "https://gitlab.insight-centre.org/api/v4"
 result = []
-
-def set_access_token(header):
-    """Request new access token"""
-    # Falls du später OAuth oder PAT benutzt:
-    # header["Authorization"] = "Bearer <TOKEN>"
-    return header
+headers = {}
 
 
-def request_gitlab_repo_license(project_id, original_url, request_session, request_header):
+def set_access_token(access_token):
+    """
+    set access header
+    """
+    with open('personal_access_token.txt', 'r', encoding="UTF-8") as github_token_file:
+        github_token = github_token_file.read().strip()
+    access_token = {
+        "PRIVATE-TOKEN":github_token
+    }
+    return access_token
+
+def get_ca():
+    """request ca"""
+    hostname = "gitlab.insight-centre.org"
+    ctx = ssl._create_unverified_context() 
+    with socket.create_connection((hostname, 443)) as sock:
+        with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+            cert = ssl.DER_cert_to_PEM_cert(ssock.getpeercert(True))
+    open("gitlab-cert.pem", "w").write(cert)
+    print("Zertifikat gespeichert ✅")
+
+
+def request_gitlab_repo_license(project_id , request_session):
     """Request repo license info and store result"""
     start_request = time.time()
-    api_url = f"https://gitlab.com/api/v4/projects/{project_id}"
-    response = request_session.get(api_url, headers=request_header)
 
-    if response.status_code == 200:
-        data = response.json()
-        if "license" in data and data["license"]:
-            license_name = data["license"]["name"]
-            result.append(f"{original_url}  --> License: {license_name}")
-        else:
-            result.append(f"{original_url}  --> License: not found")
+    repo = request_session.get(f"{BASE_URL}/projects/{project_id}?license=true", headers=headers).json()
+
+    if "license" in repo and repo["license"]:
+        license_name = repo["license"]["name"]
+        result.append(f'{repo["namespace"]["web_url"]}/{repo["name"]}  --> License: {license_name}')
     else:
-        result.append(f"{original_url}  --> Error: Status {response.status_code}")
+        result.append(f'{repo["namespace"]["web_url"]}/{repo["name"]}  --> License: not found')
 
     end_request = time.time()
     print("Request time:", round(end_request - start_request, 3), "s")
 
+def request_gitlab_project(project_id, request_session,url):
+    """Request project"""
+    try:
+        projects = request_session.get(f"{BASE_URL}/groups/{project_id}/projects", headers = headers).json()
 
-def start_checking_repos(request_urls, request_session, request_header):
-    """Request the users und projects"""
+        if not projects:
+            result.append(f"{url}  --> No Projects found")
+            return
+        
+        for project in projects:
+            request_gitlab_repo_license(project["id"],request_session)
+    except Exception as e:
+        result.append(f"{url}  --> Error:{e}")
+
+def start_checking_repos_from_list(request_session):
+    """Request projects from user"""
     start = time.time()
 
-    for url in request_urls:
-        if "gitlab.com/" not in url:
+    with open('gitlab_url.txt', 'r', encoding="UTF-8") as datei:
+        gitlab_urls = datei.read().splitlines()
+
+    for url in gitlab_urls:
+        if "gitlab.insight-centre.org" not in url:
             result.append(f"{url}  --> Invalid URL")
             continue
-
         try:
-            parts = url.split("gitlab.com/")[1].split("/")
-            username = parts[0]
+            part = url.split("gitlab.insight-centre.org")[1].split('/')
 
-            # request userId
-            user_resp = request_session.get(
-                f"https://gitlab.com/api/v4/users?username={username}", headers=request_header
-            )
-            user_data = user_resp.json()
-            if not user_data:
-                result.append(f"{url}  --> Error: user not found")
-                continue
-            user_id = user_data[0]["id"]
-
-            # request projects
-            projects_resp = request_session.get(
-                f"https://gitlab.com/api/v4/users/{user_id}/projects", headers=request_header
-            )
-            projects = projects_resp.json()
-
-            if len(parts) > 1:
-                repo_name = parts[1]
-                project = next((p for p in projects if p["name"] == repo_name), None)
-                if project:
-                    request_gitlab_repo_license(project["id"], url, request_session, request_header)
-                else:
-                    result.append(f"{url}  --> Repo not found")
-            else:
-                for project in projects:
-                    request_gitlab_repo_license(project["id"], project["web_url"], request_session, request_header)
+            if len(part) > 1:
+                url = f"{part[1]}%2F{part[2]}"
+                request_gitlab_repo_license(url,request_session)
 
         except Exception as e:
             result.append(f"{url}  --> Error: {e}")
 
-    # Ergebnisse speichern
     with open("gitlab_url_license.txt", "w", encoding="utf-8") as f:
         for line in result:
             f.write(line + "\n")
@@ -85,12 +92,43 @@ def start_checking_repos(request_urls, request_session, request_header):
     print("Done ✅")
 
 
+def start_checking_all_repos(request_session):
+    """Request the users und projects"""
+    start = time.time()
+
+    try:
+        all_groups = request_session.get(f"{BASE_URL}/groups?all_available=true&per_page=100", headers = headers).json()
+        
+        for group in all_groups:
+            request_gitlab_project(group["id"],request_session,group["web_url"])
+            
+    except Exception as e:
+        result.append(f"Error: {e}")
+
+    with open("gitlab_url_license.txt", "w", encoding="utf-8") as f:
+        for line in result:
+            f.write(line + "\n")
+
+    print("Total time:", round(time.time() - start, 2), "s")
+    print("Done ✅")
+
+def menu():
+    """Simple console menu"""
+    print("GitLab License Checker")
+    print("1. Check all repos")
+    print("2. Check specific repos from the file")
+    choice = input("Bitte Zahl eingeben (1 oder 2): ").strip()
+    return choice
+
 if __name__ == "__main__":
     session = requests.Session()
-    headers = {}
+    get_ca()
     headers = set_access_token(headers)
-
-    with open("gitlab_url.txt", "r", encoding="utf-8") as file:
-        urls = file.read().splitlines()
-
-    start_checking_repos(urls, session, headers)
+    session.verify = "gitlab-cert.pem"
+    choice = menu()
+    if choice == "1":
+        start_checking_all_repos(session)
+    elif choice == "2":
+        start_checking_repos_from_list(session)
+    else:
+        print("Ungültige Eingabe!")
