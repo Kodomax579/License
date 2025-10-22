@@ -106,7 +106,7 @@ def menu():
     print("GitLab License Checker")
     print("1. Check all repos")
     print("2. Check specific repos from the file")
-    choice = input("Bitte Zahl eingeben (1 oder 2): ").strip()
+    choice = input("press a number: (1 or 2): ").strip()
     return choice
 
 if __name__ == "__main__":
@@ -119,4 +119,4 @@ if __name__ == "__main__":
     elif choice == "2":
         start_checking_repos_from_list(session)
     else:
-        print("Ungültige Eingabe!")
+        print("Invalid input!")
