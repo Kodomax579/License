@@ -23,17 +23,6 @@ def set_access_token(access_token):
     }
     return access_token
 
-def get_ca():
-    """request ca"""
-    hostname = "gitlab.insight-centre.org"
-    ctx = ssl._create_unverified_context() 
-    with socket.create_connection((hostname, 443)) as sock:
-        with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-            cert = ssl.DER_cert_to_PEM_cert(ssock.getpeercert(True))
-    open("gitlab-cert.pem", "w").write(cert)
-    print("Zertifikat gespeichert ✅")
-
-
 def request_gitlab_repo_license(project_id , request_session):
     """Request repo license info and store result"""
     start_request = time.time()
@@ -122,9 +111,8 @@ def menu():
 
 if __name__ == "__main__":
     session = requests.Session()
-    get_ca()
     headers = set_access_token(headers)
-    session.verify = "gitlab-cert.pem"
+    session.verify = "certificate.pem"
     choice = menu()
     if choice == "1":
         start_checking_all_repos(session)
